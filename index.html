@@ -167,7 +167,7 @@ function canStart(k){
 function stopRun(reason){
   const r=S.run; if(!r) return;
   const used=Math.floor((Date.now()-r.start)/1000);
-  const d=day(r.dayKey || today()); d[r.kind]=(d[r.kind]||0)+used; S.run=null; save(); if(typeof pushPhone==="function") pushPhone();
+  const d=day(r.dayKey || today()); d[r.kind]=(d[r.kind]||0)+used; S.run=null; save(); if(typeof pushPhone==="function") pushPhone(true);
   if(reason==="limit") showLock(r.kind==="work"?"":SOCIAL[r.kind].name+" – Zeit ist um.");
 }
 function startRun(k){
@@ -486,11 +486,13 @@ async function fetchSnap(){
   save(); if(["heute","umsatz","agenten","mehr"].includes(tab) && !document.activeElement.matches("input,textarea,select")) render();
 }
 /* Handy-Zeiten zurück an den Mac (Desktop-App zeigt sie bei „Handy“ und im Tagesziel) */
-async function pushPhone(){
+async function pushPhone(force){
   const c=S.sync; if(!c.token) return;
+  if(!force && Date.now()-(c.lastPush||0)<300000) return;       // laufend höchstens alle 5 min (sonst ~60 Einträge/Stunde im Repo)
   const days={}; Object.keys(S.days).sort().slice(-7).forEach(k=>{ const d=S.days[k]; days[k]={work:d.work,yt:d.yt,ig:d.ig,tt:d.tt,videos:d.videos,leaves:d.leaves||0,giveups:d.giveups||0}; });
   if(S.run){ const d=days[today()]||(days[today()]={work:0,yt:0,ig:0,tt:0,videos:0}); d[S.run.kind]+=liveSec(S.run.kind); }
   const body=JSON.stringify({device:"Zeit-Handy-App",days}); if(body===c.pushed) return;
+  c.lastPush=Date.now();
   const url="https://api.github.com/repos/"+c.repo+"/contents/phone.json";
   try{
     const g=await fetch(url,{headers:gh(),cache:"no-store"}); const sha=g.ok?(await g.json()).sha:undefined;
@@ -582,7 +584,7 @@ document.addEventListener("click",e=>{
     if(r) S.sync.repo=r; if(t) S.sync.token=t;
     if(!S.sync.token){ toast("Bitte den Zugangsschlüssel einfügen."); return; }
     S.sync.seen=null; S.sync.err=null; S.sync.waiting=false; save(); toast("Verbinde …");
-    fetchSnap().then(()=>pushPhone()).then(()=>{ render(); toast(S.sync.err ? "✗ "+S.sync.err : S.sync.snap ? "✓ Verbunden." : "✓ Verbunden. Warte auf den ersten Upload vom Mac."); }); }
+    fetchSnap().then(()=>pushPhone(true)).then(()=>{ render(); toast(S.sync.err ? "✗ "+S.sync.err : S.sync.snap ? "✓ Verbunden." : "✓ Verbunden. Warte auf den ersten Upload vom Mac."); }); }
   else if(a==="disconnect"){ S.sync.token=""; S.sync.snap=null; S.sync.seen=null; S.sync.err=null; S.sync.waiting=false; save(); render(); }
   else if(a==="export"){
     const out=JSON.parse(JSON.stringify(S)); out.sync={repo:S.sync.repo}; out._vision=VIMGS;   // Schlüssel & Mac-Daten nie in die Sicherung
@@ -616,7 +618,7 @@ document.addEventListener("visibilitychange",()=>{ if(!document.hidden){ enforce
 
 fetchSnap(); pushPhone();
 setInterval(()=>{ if(!document.hidden){ fetchSnap(); pushPhone(); } },60000);
-document.addEventListener("visibilitychange",()=>{ if(document.hidden) pushPhone(); else fetchSnap(); });
+document.addEventListener("visibilitychange",()=>{ if(document.hidden) pushPhone(true); else fetchSnap(); });
 render();
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
