@@ -73,7 +73,8 @@ nav button.on{color:var(--accent)}
 .toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 10px);transform:translateX(-50%);
   background:#2c2c2e;border:1px solid var(--line);padding:10px 16px;border-radius:14px;z-index:30;font-size:14px;
   max-width:90%;box-shadow:0 8px 30px rgba(0,0,0,.6)}
-.kv{display:flex;justify-content:space-between;padding:6px 0}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0}
+.kv>b{text-align:right}
 .hero{border-radius:24px;padding:20px 18px;margin-bottom:12px;min-height:210px;display:flex;flex-direction:column;justify-content:flex-end;
   background:linear-gradient(135deg,rgba(64,77,242,.55),rgba(178,64,217,.45)) center/cover;border:1px solid var(--line);position:relative;overflow:hidden}
 .hero .q{font-size:21px;font-weight:700;line-height:1.2;letter-spacing:-.3px;text-shadow:0 2px 12px rgba(0,0,0,.6)}
@@ -388,13 +389,21 @@ function revenue(per){
   return {lines,total,orders};
 }
 function notConnected(){
+  if(S.sync.token){
+    return S.sync.err
+      ? `<div class="card"><b class="red">Verbindung fehlgeschlagen</b><p class="small dim">${esc(S.sync.err)}</p>
+          <button class="primary block" data-tab="mehr">Einstellungen öffnen</button></div>`
+      : `<div class="card"><b class="green">Verbunden · wartet auf den Mac</b>
+          <p class="small dim">Das Handy ist mit dem Daten-Speicher verbunden. Umsatz und Agenten erscheinen, sobald der Mac die erste Datei hochgeladen hat (<code>export-snapshot.py --sync</code>).</p>
+          <button class="block" data-tab="mehr">Einstellungen öffnen</button></div>`;
+  }
   return `<div class="card"><b>Noch nicht mit dem Mac verbunden</b>
     <p class="small dim">Hier erscheinen Umsatz und Agenten, sobald in den Einstellungen (⚙︎) der Zugangsschlüssel für den privaten Daten-Speicher eingetragen ist.</p>
     <button class="primary block" data-tab="mehr">Einstellungen öffnen</button></div>`;
 }
 function vUmsatz(){
   const c=S.sync, r=revenue(S.per), g=S.goals, p=g.porsche;
-  if(!r) return head("Umsatz")+notConnected()+(c.err?`<p class="red small">Fehler: ${esc(c.err)}</p>`:"");
+  if(!r) return head("Umsatz")+notConnected();
   const m=revenue("month"), mp=Math.min(100,m.total/g.monthTarget*100), pp=Math.min(100,p.saved/p.target*100);
   const max=Math.max(1,...r.lines.map(l=>l[1]));
   const recent=(c.snap.resale&&c.snap.resale.recent)||[];
