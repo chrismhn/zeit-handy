@@ -121,6 +121,7 @@ function fresh(){ return { todos:[], days:{}, run:null, goals:{
 let S; try{ S = Object.assign(fresh(), JSON.parse(localStorage.getItem(KEY)||"{}")); }catch(e){ S = fresh(); }
 S.sync = Object.assign(fresh().sync, S.sync||{});
 S.goals = Object.assign(fresh().goals, S.goals||{});
+if(S.why===undefined) S.why="Für Mama und meine Familie. Freiheit: arbeiten, wo ich will. 10.000 € Profit im Monat.";
 const save = () => localStorage.setItem(KEY, JSON.stringify(S));
 function day(k=today()){ return S.days[k] || (S.days[k] = {work:0, yt:0, ig:0, tt:0, videos:0, passes:0, passReasons:[], passOn:false}); }
 
@@ -187,9 +188,12 @@ function toast(t){ const e=document.createElement("div"); e.className="toast"; e
 let tab="heute"; function setTab(t){ tab=t; render(); window.scrollTo(0,0); }
 
 /* ---------- Vision Board & Motivation (Fotos bleiben nur auf diesem Gerät) ---------- */
-const QUOTES=["Heute entscheidet, wer du in einem Jahr bist.","Disziplin schlägt Motivation. Jeden Tag.","Erst die Arbeit. Dann der Porsche.","Kleine Schritte, jeden Tag, ohne Ausnahme.","Wer heute scrollt, zahlt morgen.","Eine erledigte Aufgabe ist mehr wert als zehn Pläne.","Du hast es dir versprochen. Halte es.","Fokus ist die neue Superkraft.","Nicht fühlen. Machen.","Dein zukünftiges Ich schaut zu.","Umsatz kommt von Handlung, nicht von Hoffnung.","Zwei Stunden Arbeit. Dann darfst du Pause.","Der Weg zum Ziel ist langweilig. Genau deshalb gewinnst du.","Heute 1 % besser reicht.","Mach die Aufgabe, vor der du dich drückst."];
+const QUOTES=["Erst fertig machen. Dann gucken.","Never miss a day.","Heute entscheidet, wer du in einem Jahr bist.","Disziplin schlägt Motivation. Jeden Tag.","Erst die Arbeit. Dann der Porsche.","Kleine Schritte, jeden Tag, ohne Ausnahme.","Wer heute scrollt, zahlt morgen.","Eine erledigte Aufgabe ist mehr wert als zehn Pläne.","Du hast es dir versprochen. Halte es.","Fokus ist die neue Superkraft.","Nicht fühlen. Machen.","Dein zukünftiges Ich schaut zu.","Umsatz kommt von Handlung, nicht von Hoffnung.","Zwei Stunden Arbeit. Dann darfst du Pause.","Der Weg zum Ziel ist langweilig. Genau deshalb gewinnst du.","Heute 1 % besser reicht.","Mach die Aufgabe, vor der du dich drückst."];
 const VKEY="zeit.vision.imgs";
-const visionImgs=()=>{ try{ return JSON.parse(localStorage.getItem(VKEY)||"[]"); }catch(e){ return []; } };
+const SEED_VIS=[2,3,4,6,7,8,9,10,11].map(n=>"vis/p"+n+".jpg");
+let VIMGS=SEED_VIS.slice(); try{ const l=JSON.parse(localStorage.getItem(VKEY)||"null"); if(Array.isArray(l)) VIMGS=l; }catch(e){}
+const visionImgs=()=>VIMGS;
+function setVision(l){ VIMGS=l; try{ localStorage.setItem(VKEY,JSON.stringify(l)); }catch(e){ toast("Speicher voll, bitte ein Bild entfernen."); } }
 const dayIdx=()=>Math.floor(Date.now()/864e5);
 function shrink(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onerror=rej; r.onload=()=>{ const im=new Image(); im.onerror=rej;
   im.onload=()=>{ const m=720, k=Math.min(1,m/Math.max(im.width,im.height)), c=document.createElement("canvas"); c.width=Math.round(im.width*k); c.height=Math.round(im.height*k);
@@ -519,7 +523,7 @@ document.addEventListener("click",e=>{
   else if(a==="freedom"){ const v=parseFloat($("#fp").value); if(isNaN(v)) return; S.goals.freedom.profit=Math.max(0,v); save(); render(); }
   else if(a==="month"){ const v=parseFloat($("#ms").value); if(isNaN(v)) return; S.goals.months[month()]=Math.max(0,v); save(); render(); }
   else if(a==="mtarget"){ const v=parseFloat($("#mt").value); if(isNaN(v)) return; S.goals.monthTarget=Math.max(5000,v); save(); render(); if(v<5000) toast("Mindestens 5.000 €."); }
-  else if(a==="vdel"){ const l=visionImgs(); l.splice(+el.dataset.i,1); localStorage.setItem(VKEY,JSON.stringify(l)); render(); }
+  else if(a==="vdel"){ const l=visionImgs().slice(); l.splice(+el.dataset.i,1); setVision(l); render(); }
   else if(a==="why"){ S.why=$("#why").value; save(); render(); toast("Gespeichert."); }
   else if(a==="per"){ S.per=el.dataset.p; save(); render(); }
   else if(a==="connect"){ const t=$("#tok").value.trim(), r=$("#repo").value.trim();
@@ -531,10 +535,9 @@ document.addEventListener("click",e=>{
   else if(a==="reset"){ if(confirm("Wirklich ALLE Daten auf diesem Gerät löschen? Das geht nicht rückgängig.")){ S=fresh(); save(); render(); } }
 });
 document.addEventListener("change",async e=>{
-  if(e.target.id==="vis"){ const l=visionImgs();
+  if(e.target.id==="vis"){ const l=visionImgs().slice();
     for(const f of [...e.target.files].slice(0,12)){ try{ l.push(await shrink(f)); }catch(x){} }
-    try{ localStorage.setItem(VKEY,JSON.stringify(l.slice(-12))); }catch(x){ toast("Speicher voll, bitte ein Bild entfernen."); }
-    render(); return; }
+    setVision(l.slice(-16)); render(); return; }
   if(e.target.id==="imp"){ const f=e.target.files[0]; if(!f) return; const r=new FileReader();
     r.onload=()=>{ try{ const o=JSON.parse(r.result); if(!o.todos||!o.days) throw 0; S=Object.assign(fresh(),o); save(); render(); toast("Importiert."); }catch(x){ toast("Datei passt nicht."); } };
     r.readAsText(f); }
