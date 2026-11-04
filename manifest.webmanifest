@@ -2,6 +2,7 @@
   "name": "Zeit",
   "short_name": "Zeit",
   "description": "Aufgaben, Punkte, Fokus und Limits – persönlicher Begleiter",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -118,11 +118,23 @@ const month = () => today().slice(0,7);
 function fresh(){ return { todos:[], days:{}, run:null, goals:{
   porsche:{target:900000, saved:0}, freedom:{target:10000, profit:0}, monthTarget:5000, months:{} }, area:"Alle", per:"today",
   sync:{token:"", repo:"chrismhn/zeit-daten", seen:null, shopOrders:null, snap:null, last:0, err:null, pushed:""} }; }
-let S; try{ S = Object.assign(fresh(), JSON.parse(localStorage.getItem(KEY)||"{}")); }catch(e){ S = fresh(); }
-S.sync = Object.assign(fresh().sync, S.sync||{});
-S.goals = Object.assign(fresh().goals, S.goals||{});
-if(S.why===undefined) S.why="Für Mama und meine Familie. Freiheit: arbeiten, wo ich will. 10.000 € Profit im Monat.";
-const save = () => localStorage.setItem(KEY, JSON.stringify(S));
+const DEFAULT_WHY = "Für Mama und meine Familie. Freiheit: arbeiten, wo ich will. 10.000 € Profit im Monat.";
+/* Gespeicherte/importierte Daten auf Standardwerte auffüllen, damit nichts fehlt */
+function normalize(o){
+  const f=fresh(), s=Object.assign(f, (o&&typeof o==="object")?o:{});
+  s.sync = Object.assign(fresh().sync, s.sync||{});
+  s.goals = Object.assign(fresh().goals, s.goals||{});
+  s.goals.porsche = Object.assign(fresh().goals.porsche, s.goals.porsche||{});
+  s.goals.freedom = Object.assign(fresh().goals.freedom, s.goals.freedom||{});
+  if(!Array.isArray(s.todos)) s.todos=[];
+  if(!s.days||typeof s.days!=="object") s.days={};
+  if(s.why===undefined) s.why=DEFAULT_WHY;
+  return s;
+}
+let S; try{ S = normalize(JSON.parse(localStorage.getItem(KEY)||"{}")); }catch(e){ S = normalize({}); }
+let saveWarned=false;
+const save = () => { try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){
+  if(!saveWarned){ saveWarned=true; toast("Speicher voll – Änderungen werden nicht gesichert. Bitte Datei exportieren."); } } };
 function day(k=today()){ return S.days[k] || (S.days[k] = {work:0, yt:0, ig:0, tt:0, videos:0, passes:0, passReasons:[], passOn:false}); }
 
 /* ---------- Logik ---------- */
@@ -338,9 +350,9 @@ function vMehr(){
     return `<div class="kv small"><span>${k}</span><span>Arbeit ${mins(d.work)} · Ablenkung ${mins(d.yt+d.ig+d.tt)} · ${todoPointsOn(k)} P</span></div>`}).join(""):'<span class="dim small">Noch keine Daten.</span>'}</div>
   <h2>Verbindung zum Mac</h2>
   <div class="card small">
-    <div class="kv"><span>Status</span><b class="${S.sync.token?(S.sync.err?'red':'green'):'dim'}">${S.sync.token?(S.sync.err?esc(S.sync.err):'verbunden · '+ago(S.sync.snap&&S.sync.snap.updatedAt)):'nicht verbunden'}</b></div>
+    <div class="kv"><span>Status</span><b class="${S.sync.token?(S.sync.err?'red':'green'):'dim'}">${S.sync.token?(S.sync.err?esc(S.sync.err):(S.sync.snap?'verbunden · '+ago(S.sync.snap.updatedAt):'verbunden · wartet auf ersten Upload vom Mac')):'nicht verbunden'}</b></div>
     <input id="repo" value="${esc(S.sync.repo)}" placeholder="Benutzer/Repo" style="margin-top:8px">
-    <input id="tok" type="password" placeholder="${S.sync.token?'Schlüssel gespeichert (zum Ändern neu eintragen)':'Zugangsschlüssel (github_pat_…)'}" style="margin-top:8px" autocomplete="off">
+    <input id="tok" type="text" placeholder="${S.sync.token?'Schlüssel gespeichert (zum Ändern neu eintragen)':'Zugangsschlüssel (github_pat_… oder ghp_…)'}" style="margin-top:8px" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
     <button class="primary block" data-act="connect" style="margin-top:8px">Verbinden</button>
     ${S.sync.token?'<button class="block" data-act="disconnect" style="margin-top:8px">Trennen</button>':''}
     <p class="dim" style="margin-bottom:0">Der Schlüssel bleibt nur auf diesem Gerät. Er braucht Lese- und Schreibrecht (Contents) für genau das eine private Repo.</p>
@@ -426,13 +438,33 @@ function vAgenten(){
 
 /* ---------- Abgleich mit dem Mac über privaten GitHub-Speicher ---------- */
 const gh = () => ({Authorization:"Bearer "+S.sync.token, Accept:"application/vnd.github+json"});
+/* Eingaben säubern: Handy-Einfügen bringt oft Leerzeichen, Umbrüche, Anführungszeichen oder die ganze GitHub-URL mit */
+const cleanToken = t => String(t||"").replace(/^(authorization:)?\s*(bearer|token)\s+/i,"").replace(/[\s"'“”‘’`]/g,"");
+const cleanRepo = r => String(r||"").trim().replace(/^https?:\/\/(www\.)?github\.com\//i,"").replace(/\.git$/i,"").replace(/^\/+|\/+$/g,"");
+/* Genau sagen, was an der Verbindung falsch ist (GitHub meldet bei fehlendem Zugriff nur „404") */
+async function checkConnection(){
+  const c=S.sync;
+  if(!/^[\w.-]+\/[\w.-]+$/.test(c.repo||"")) return "Repo muss so aussehen: Benutzer/Repo (z. B. chrismhn/zeit-daten).";
+  let r;
+  try{ r=await fetch("https://api.github.com/repos/"+c.repo,{headers:gh(),cache:"no-store"}); }
+  catch(e){ return "Keine Verbindung zu GitHub (Internet prüfen)."; }
+  if(r.status===401) return "Schlüssel ungültig oder abgelaufen. Neu erstellen und komplett einfügen.";
+  if(r.status===403) return "Schlüssel gesperrt (403) – evtl. Rate-Limit oder fehlende Berechtigung.";
+  if(r.status===404) return "Repo „"+c.repo+"“ nicht gefunden – oder der Schlüssel hat keinen Zugriff darauf. Beim Erstellen genau dieses Repo auswählen.";
+  if(!r.ok) return "GitHub-Fehler "+r.status;
+  try{ const j=await r.json(); if(j.permissions && j.permissions.push===false) return "Schlüssel darf nur lesen. Contents auf „Read and write“ stellen, sonst kommen die Handy-Zeiten nicht zurück."; }catch(e){}
+  return null;
+}
 async function fetchSnap(){
   const c=S.sync; let snap=null;
   try{
     if(c.token){
       const r=await fetch("https://api.github.com/repos/"+c.repo+"/contents/snapshot.json",{headers:{...gh(),Accept:"application/vnd.github.raw+json"},cache:"no-store"});
-      if(!r.ok) throw new Error(r.status===404?"Datei noch nicht vorhanden (Mac hat noch nichts hochgeladen)":r.status===401||r.status===403?"Schlüssel abgelehnt":"Fehler "+r.status);
-      snap=await r.json(); c.err=null;
+      if(!r.ok){ const why=await checkConnection();
+        if(why) throw new Error(why);
+        if(r.status===404){ c.err=null; c.waiting=true; save(); return; }          // Verbindung ok, Mac hat nur noch nichts hochgeladen
+        throw new Error("Fehler "+r.status); }
+      snap=await r.json(); c.err=null; c.waiting=false;
     } else { const r=await fetch("snapshot.json",{cache:"no-store"}); if(r.ok) snap=await r.json(); }
   }catch(e){ c.err=String(e.message||e); }
   if(snap){
@@ -454,8 +486,9 @@ async function pushPhone(){
   try{
     const g=await fetch(url,{headers:gh(),cache:"no-store"}); const sha=g.ok?(await g.json()).sha:undefined;
     const r=await fetch(url,{method:"PUT",headers:gh(),body:JSON.stringify({message:"Handy",content:btoa(unescape(encodeURIComponent(body))),sha})});
-    if(r.ok){ c.pushed=body; c.err=null; } else c.err="Senden fehlgeschlagen ("+r.status+")";
-  }catch(e){ c.err="Senden fehlgeschlagen"; }
+    if(r.ok){ c.pushed=body; c.err=null; }
+    else c.err = (r.status===403||r.status===404||r.status===401) ? (await checkConnection()||"Schlüssel darf nicht schreiben (Contents: Read and write nötig).") : "Senden fehlgeschlagen ("+r.status+")";
+  }catch(e){ c.err="Senden fehlgeschlagen (kein Netz?)"; }
   save();
 }
 
@@ -493,13 +526,24 @@ document.addEventListener("visibilitychange",()=>{
 /* ---------- Rendering ---------- */
 const TABS=[["heute","◐","Heute"],["umsatz","€","Umsatz"],["agenten","✦","Agenten"],["aufgaben","☑︎","Aufgaben"],["sperren","⛔︎","Sperren"]];
 const head = t => `<div class="row"><h1 class="grow">${t}</h1><button class="gear" data-tab="mehr" aria-label="Einstellungen">⚙︎</button></div>`;
+/* Bildschirm während der Arbeit anlassen – sonst zählt die Auto-Sperre als „weggewechselt" und kostet Punkte */
+let wl=null, wlBusy=false;
+async function wakeSync(){
+  if(wlBusy || !navigator.wakeLock) return; wlBusy=true;
+  try{
+    const need = !!(S.run && S.run.kind==="work") && !document.hidden;
+    if(need && !wl){ wl=await navigator.wakeLock.request("screen"); wl.addEventListener("release",()=>{ wl=null; }); }
+    else if(!need && wl){ await wl.release(); wl=null; }
+  }catch(e){ wl=null; }
+  wlBusy=false;
+}
 function render(){
   const views={heute:vHeute,umsatz:vUmsatz,agenten:vAgenten,aufgaben:vAufgaben,sperren:vSperren,mehr:vMehr};
   const keep = document.activeElement && document.activeElement.id==="nt" ? document.activeElement.value : null;
   $("#app").innerHTML=views[tab]();
   $("#nav").innerHTML=TABS.map(t=>`<button class="${tab===t[0]?'on':''}" data-tab="${t[0]}"><b>${t[1]}</b>${t[2]}</button>`).join("");
   if(keep!==null && $("#nt")){ $("#nt").value=keep; }
-  focusOverlay();
+  focusOverlay(); wakeSync();
 }
 
 /* ---------- Aktionen ---------- */
@@ -521,25 +565,32 @@ document.addEventListener("click",e=>{
     if(d.passes>=PASS_MAX) return; d.passes++; d.passOn=true; d.passReasons.push(r); save(); render(); toast("Freigabe aktiv."); }
   else if(a==="porsche"){ const v=parseFloat($("#ps").value); if(isNaN(v)) return; S.goals.porsche.saved=Math.max(0,v); save(); render(); }
   else if(a==="freedom"){ const v=parseFloat($("#fp").value); if(isNaN(v)) return; S.goals.freedom.profit=Math.max(0,v); save(); render(); }
-  else if(a==="month"){ const v=parseFloat($("#ms").value); if(isNaN(v)) return; S.goals.months[month()]=Math.max(0,v); save(); render(); }
   else if(a==="mtarget"){ const v=parseFloat($("#mt").value); if(isNaN(v)) return; S.goals.monthTarget=Math.max(5000,v); save(); render(); if(v<5000) toast("Mindestens 5.000 €."); }
   else if(a==="vdel"){ const l=visionImgs().slice(); l.splice(+el.dataset.i,1); setVision(l); render(); }
   else if(a==="why"){ S.why=$("#why").value; save(); render(); toast("Gespeichert."); }
   else if(a==="per"){ S.per=el.dataset.p; save(); render(); }
-  else if(a==="connect"){ const t=$("#tok").value.trim(), r=$("#repo").value.trim();
-    if(r) S.sync.repo=r; if(t) S.sync.token=t; S.sync.seen=null; S.sync.err=null; save(); toast("Verbinde …");
-    fetchSnap().then(()=>{ pushPhone(); render(); }); }
-  else if(a==="disconnect"){ S.sync.token=""; S.sync.snap=null; S.sync.seen=null; save(); render(); }
-  else if(a==="export"){ const b=new Blob([JSON.stringify(S,null,1)],{type:"application/json"}), u=URL.createObjectURL(b), l=document.createElement("a");
+  else if(a==="connect"){ const t=cleanToken($("#tok").value), r=cleanRepo($("#repo").value);
+    if(r) S.sync.repo=r; if(t) S.sync.token=t;
+    if(!S.sync.token){ toast("Bitte den Zugangsschlüssel einfügen."); return; }
+    S.sync.seen=null; S.sync.err=null; S.sync.waiting=false; save(); toast("Verbinde …");
+    fetchSnap().then(()=>pushPhone()).then(()=>{ render(); toast(S.sync.err ? "✗ "+S.sync.err : S.sync.snap ? "✓ Verbunden." : "✓ Verbunden. Warte auf den ersten Upload vom Mac."); }); }
+  else if(a==="disconnect"){ S.sync.token=""; S.sync.snap=null; S.sync.seen=null; S.sync.err=null; S.sync.waiting=false; save(); render(); }
+  else if(a==="export"){
+    const out=JSON.parse(JSON.stringify(S)); out.sync={repo:S.sync.repo}; out._vision=VIMGS;   // Schlüssel & Mac-Daten nie in die Sicherung
+    const b=new Blob([JSON.stringify(out,null,1)],{type:"application/json"}), u=URL.createObjectURL(b), l=document.createElement("a");
     l.href=u; l.download="zeit-sicherung-"+today()+".json"; l.click(); setTimeout(()=>URL.revokeObjectURL(u),2000); }
-  else if(a==="reset"){ if(confirm("Wirklich ALLE Daten auf diesem Gerät löschen? Das geht nicht rückgängig.")){ S=fresh(); save(); render(); } }
+  else if(a==="reset"){ if(confirm("Wirklich ALLE Daten auf diesem Gerät löschen? Das geht nicht rückgängig.")){ S=normalize({}); save(); render(); } }
 });
 document.addEventListener("change",async e=>{
   if(e.target.id==="vis"){ const l=visionImgs().slice();
     for(const f of [...e.target.files].slice(0,12)){ try{ l.push(await shrink(f)); }catch(x){} }
     setVision(l.slice(-16)); render(); return; }
   if(e.target.id==="imp"){ const f=e.target.files[0]; if(!f) return; const r=new FileReader();
-    r.onload=()=>{ try{ const o=JSON.parse(r.result); if(!o.todos||!o.days) throw 0; S=Object.assign(fresh(),o); save(); render(); toast("Importiert."); }catch(x){ toast("Datei passt nicht."); } };
+    r.onload=()=>{ try{ const o=JSON.parse(r.result); if(!o.todos||!o.days) throw 0;
+      const keep=S.sync, vis=Array.isArray(o._vision)?o._vision:null; delete o._vision;
+      S=normalize(o); S.sync=keep;                       // eigener Schlüssel bleibt, Sicherung enthält keinen
+      if(vis) setVision(vis);
+      save(); render(); toast("Importiert."); }catch(x){ toast("Datei passt nicht."); } };
     r.readAsText(f); }
 });
 document.addEventListener("keydown",e=>{ if(e.key==="Enter" && e.target.id==="nt"){ document.querySelector('[data-act="add"]').click(); }});
