@@ -130,6 +130,7 @@ function normalize(o){
   if(!Array.isArray(s.todos)) s.todos=[];
   if(!s.days||typeof s.days!=="object") s.days={};
   if(s.why===undefined) s.why=DEFAULT_WHY;
+  s.inbox = Object.assign({read:[],seen:[],msgs:[]}, s.inbox||{});
   return s;
 }
 let S; try{ S = normalize(JSON.parse(localStorage.getItem(KEY)||"{}")); }catch(e){ S = normalize({}); }
@@ -240,7 +241,7 @@ function vHeute(){
   open.sort((a,b)=>order[a.prio]-order[b.prio] || a.created-b.created);
   const focus=open[0];
   const rp = rk.next ? Math.round((xp-rk.base)/(rk.next-rk.base)*100) : 100;
-  return head("Heute")+heroCard()+`
+  return head("Heute")+heroCard()+inboxCard()+`
   <div class="card row">
     <div class="ring"><svg width="150" height="150"><circle cx="75" cy="75" r="62" stroke="rgba(255,255,255,.12)" stroke-width="12" fill="none"/>
       <circle cx="75" cy="75" r="62" stroke="var(--accent)" stroke-width="12" fill="none" stroke-linecap="round" stroke-dasharray="${C}" stroke-dashoffset="${off}"/></svg>
@@ -464,6 +465,52 @@ async function checkConnection(){
   try{ const j=await r.json(); if(j.permissions && j.permissions.push===false) return "Schlüssel darf nur lesen. Contents auf „Read and write“ stellen, sonst kommen die Handy-Zeiten nicht zurück."; }catch(e){}
   return null;
 }
+/* Postkasten: Nachrichten/Aufgaben von Claude (inbox.json im Daten-Repo). Nur wer den Schlüssel hat, kann hier etwas ablegen. */
+async function fetchInbox(){
+  const c=S.sync; if(!c.token || !c.repo) return;
+  try{
+    const r=await fetch("https://api.github.com/repos/"+c.repo+"/contents/inbox.json",{headers:{...gh(),Accept:"application/vnd.github.raw+json"},cache:"no-store"});
+    if(!r.ok) return;                                    // 404 = nichts da
+    const box=await r.json(); S.inbox=S.inbox||{read:[],seen:[],msgs:[]};
+    const ib=S.inbox; let n=0;
+    (Array.isArray(box.todos)?box.todos:[]).forEach(t=>{
+      if(!t||!t.id||!t.title) return; const id="cl-"+String(t.id).slice(0,40);
+      if(ib.seen.includes(id)||S.todos.some(x=>x.id===id)) return;
+      const prio=PRIOS[t.prio]?t.prio:"mittel";
+      S.todos.push({id,title:String(t.title).slice(0,200),area:AREAS.includes(t.area)?t.area:"Privat",prio,points:PRIOS[prio],done:false,created:Date.now(),from:"Claude"});
+      ib.seen.push(id); n++; });
+    ib.seen=ib.seen.slice(-200);
+    ib.msgs=(Array.isArray(box.messages)?box.messages:[]).filter(m=>m&&m.id&&m.text).slice(-10).map(m=>({id:String(m.id).slice(0,40),text:String(m.text).slice(0,500),date:String(m.date||"").slice(0,20)}));
+    if(n) toast("Neue Aufgabe von Claude: "+n);
+    save();
+  }catch(e){}
+}
+const unreadMsgs = () => ((S.inbox&&S.inbox.msgs)||[]).filter(m=>!S.inbox.read.includes(m.id));
+function inboxCard(){
+  const u=unreadMsgs(); if(!u.length) return "";
+  return u.map(m=>`<div class="card" style="border-color:var(--accent)"><div class="row"><div class="grow"><div class="dim small">Von Claude${m.date?" · "+esc(m.date):""}</div><div style="margin-top:4px">${esc(m.text)}</div></div>
+    <button data-act="msgread" data-id="${esc(m.id)}">Gelesen</button></div></div>`).join("");
+}
+/* Stand an Claude zurück: Aufgaben, Punkte, Tageswerte (state.json), höchstens alle 2 min */
+async function pushState(force){
+  const c=S.sync; if(!c.token) return;
+  if(!force && Date.now()-(c.lastState||0)<120000) return;
+  const cut=new Date(Date.now()-7*864e5).toISOString().slice(0,10), d=day();
+  const st={device:"Zeit-Handy-App",points:{today:todoPointsOn(today()),total:totalXP(),rank:rank(totalXP()).name},
+    today:{workMin:Math.floor(secs("work")/60),doneToday:doneToday(),videos:d.videos},
+    todos:S.todos.filter(t=>!t.archived&&(!t.done||(t.doneAt&&t.doneAt>=cut))).slice(-60).map(t=>({id:t.id,title:t.title,area:t.area,prio:t.prio,done:!!t.done,doneAt:t.doneAt||null,from:t.from||null})),
+    readMessages:((S.inbox&&S.inbox.read)||[]).slice(-20)};
+  const body=JSON.stringify(st); if(body===c.stateSent) return;
+  c.lastState=Date.now();
+  const url="https://api.github.com/repos/"+c.repo+"/contents/state.json";
+  try{
+    const g=await fetch(url,{headers:gh(),cache:"no-store"}); const sha=g.ok?(await g.json()).sha:undefined;
+    const out=JSON.stringify({...st,updatedAt:new Date().toISOString()});
+    const r=await fetch(url,{method:"PUT",headers:gh(),body:JSON.stringify({message:"Handy-Stand",content:btoa(unescape(encodeURIComponent(out))),sha})});
+    if(r.ok) c.stateSent=body;
+  }catch(e){}
+  save();
+}
 async function fetchSnap(){
   const c=S.sync; let snap=null;
   try{
@@ -471,7 +518,7 @@ async function fetchSnap(){
       const r=await fetch("https://api.github.com/repos/"+c.repo+"/contents/snapshot.json",{headers:{...gh(),Accept:"application/vnd.github.raw+json"},cache:"no-store"});
       if(!r.ok){ const why=await checkConnection();
         if(why) throw new Error(why);
-        if(r.status===404){ c.err=null; c.waiting=true; save(); return; }          // Verbindung ok, Mac hat nur noch nichts hochgeladen
+        if(r.status===404){ c.err=null; c.waiting=true; await fetchInbox(); save(); if(tab==="heute"&&!document.activeElement.matches("input,textarea,select")) render(); return; }          // Verbindung ok, Mac hat nur noch nichts hochgeladen
         throw new Error("Fehler "+r.status); }
       snap=await r.json(); c.err=null; c.waiting=false;
     } else { const r=await fetch("snapshot.json",{cache:"no-store"}); if(r.ok) snap=await r.json(); }
@@ -483,11 +530,13 @@ async function fetchSnap(){
       if(c.shopOrders!==null && orders>c.shopOrders) toast("💰 Neue Shop-Bestellung"); }
     c.seen=ids; c.shopOrders=orders; c.snap=snap; c.last=Date.now();
   }
-  save(); if(["heute","umsatz","agenten","mehr"].includes(tab) && !document.activeElement.matches("input,textarea,select")) render();
+  await fetchInbox();
+  save(); if(["heute","umsatz","agenten","aufgaben","mehr"].includes(tab) && !document.activeElement.matches("input,textarea,select")) render();
 }
 /* Handy-Zeiten zurück an den Mac (Desktop-App zeigt sie bei „Handy“ und im Tagesziel) */
 async function pushPhone(force){
   const c=S.sync; if(!c.token) return;
+  pushState(force);
   if(!force && Date.now()-(c.lastPush||0)<300000) return;       // laufend höchstens alle 5 min (sonst ~60 Einträge/Stunde im Repo)
   const days={}; Object.keys(S.days).sort().slice(-7).forEach(k=>{ const d=S.days[k]; days[k]={work:d.work,yt:d.yt,ig:d.ig,tt:d.tt,videos:d.videos,leaves:d.leaves||0,giveups:d.giveups||0}; });
   if(S.run){ const d=days[today()]||(days[today()]={work:0,yt:0,ig:0,tt:0,videos:0}); d[S.run.kind]+=liveSec(S.run.kind); }
@@ -566,9 +615,9 @@ document.addEventListener("click",e=>{
   else if(a==="stop"){ if(S.run&&S.run.kind==="work"&&liveSec("work")<1500) giveUp(); else { stopRun(); render(); } }
   else if(a==="area"){ S.area=el.dataset.a; save(); render(); }
   else if(a==="add"){ const t=$("#nt").value.trim(); if(!t){ toast("Titel fehlt."); return; }
-    const prio=$("#np").value; S.todos.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,5),title:t,area:$("#na").value,prio,points:PRIOS[prio],done:false,created:Date.now()}); save(); render(); }
+    const prio=$("#np").value; S.todos.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,5),title:t,area:$("#na").value,prio,points:PRIOS[prio],done:false,created:Date.now()}); save(); render(); pushState(); }
   else if(a==="done"){ const t=S.todos.find(x=>x.id===id); if(!t) return;
-    t.done=!t.done; t.doneAt=t.done?today():null; save(); render(); if(t.done) toast("+"+t.points+" Punkte"); }
+    t.done=!t.done; t.doneAt=t.done?today():null; save(); render(); pushState(); if(t.done) toast("+"+t.points+" Punkte"); }
   else if(a==="arch"){ const t=S.todos.find(x=>x.id===id); if(t){ t.archived=true; save(); render(); } }
   else if(a==="video"){ const d=day(); d.videos++; save(); if(d.videos>=VIDEO_CAP){ stopRun("limit"); } render(); }
   else if(a==="pass"){ const d=day(), r=$("#pr").value.trim();
@@ -578,6 +627,7 @@ document.addEventListener("click",e=>{
   else if(a==="freedom"){ const v=parseFloat($("#fp").value); if(isNaN(v)) return; S.goals.freedom.profit=Math.max(0,v); save(); render(); }
   else if(a==="mtarget"){ const v=parseFloat($("#mt").value); if(isNaN(v)) return; S.goals.monthTarget=Math.max(5000,v); save(); render(); if(v<5000) toast("Mindestens 5.000 €."); }
   else if(a==="vdel"){ const l=visionImgs().slice(); l.splice(+el.dataset.i,1); setVision(l); render(); }
+  else if(a==="msgread"){ S.inbox=S.inbox||{read:[],seen:[],msgs:[]}; S.inbox.read.push(id); S.inbox.read=S.inbox.read.slice(-100); save(); render(); pushState(true); }
   else if(a==="why"){ S.why=$("#why").value; save(); render(); toast("Gespeichert."); }
   else if(a==="per"){ S.per=el.dataset.p; save(); render(); }
   else if(a==="connect"){ const t=cleanToken($("#tok").value), r=cleanRepo($("#repo").value);

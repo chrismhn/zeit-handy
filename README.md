@@ -21,3 +21,20 @@ Der Schlüssel bleibt nur auf dem Gerät und ist **nicht** in der Sicherungsdate
 Grenzen: Eine Web-App kann andere Apps nicht sperren und Bildschirmzeit nicht lesen. Webseiten-Sperre: Filter-Profil (`Zeit-Filter.mobileconfig`) + Bildschirmzeit.
 
 Mac-Seite: `export-snapshot.py --sync` (alle 5 min per `de.chrismohn.zeit.handy-sync.plist`).
+
+## Postkasten (Claude ↔ Handy)
+
+Die App holt im Daten-Repo `inbox.json` ab und schickt ihren Stand als `state.json` zurück.
+
+`inbox.json` (wird von Claude oder dir im Repo `zeit-daten` abgelegt):
+
+```json
+{
+  "messages": [{"id": "m1", "date": "2026-11-05", "text": "Guten Morgen!"}],
+  "todos":    [{"id": "t1", "title": "Lieferanten-Fragen senden", "area": "MySolv", "prio": "hoch"}]
+}
+```
+
+- Nachrichten erscheinen auf „Heute", bis du „Gelesen" tippst.
+- Aufgaben landen einmal in „Aufgaben" (die `id` verhindert Duplikate).
+- `state.json`: Aufgaben, Punkte und Tageswerte, höchstens alle 2 Minuten.
