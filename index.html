@@ -131,9 +131,10 @@ function normalize(o){
   if(!s.days||typeof s.days!=="object") s.days={};
   if(s.why===undefined) s.why=DEFAULT_WHY;
   s.inbox = Object.assign({read:[],seen:[],msgs:[]}, s.inbox||{});
+  if(s.sync.snap && typeof cleanSnap==="function") s.sync.snap=cleanSnap(s.sync.snap);
   return s;
 }
-let S; try{ S = normalize(JSON.parse(localStorage.getItem(KEY)||"{}")); }catch(e){ S = normalize({}); }
+let S; try{ S = normalize(JSON.parse(localStorage.getItem(KEY)||"{}")); }catch(e){ try{ localStorage.setItem(KEY+".defekt", localStorage.getItem(KEY)); }catch(x){} S = normalize({}); }
 let saveWarned=false;
 const save = () => { try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){
   if(!saveWarned){ saveWarned=true; toast("Speicher voll – Änderungen werden nicht gesichert. Bitte Datei exportieren."); } } };
@@ -431,6 +432,7 @@ function vUmsatz(){
   <h2>Letzte Verkäufe</h2>
   <div class="card">${recent.length?recent.slice(0,10).map(x=>`<div class="todo"><div class="grow"><div>${esc(x.title)}</div>
     <div class="small dim">${PLAT[x.platform]||x.platform} · ${x.date}</div></div><b class="green">+${eur(x.price)}</b></div>`).join(""):'<span class="dim small">Noch keine.</span>'}</div>
+  ${c.err?`<p class="small red">Gerade gestört: ${esc(c.err)}</p>`:""}
   <p class="small dim">Stand ${ago(c.snap.updatedAt)}. Die Zahlen kommen vom Mac, sobald dort ein Verkauf abgerufen wurde.</p>`;
 }
 function vAgenten(){
@@ -438,7 +440,7 @@ function vAgenten(){
   if(!sn) return head("Agenten")+notConnected();
   const rows=sn.agents||[], names=[...new Set(rows.map(r=>r.agent))], t=today();
   const cl=sn.claude;
-  return head("Agenten")+names.map(n=>{ const mine=rows.filter(r=>r.agent===n), last=mine[0], act=last.date===t;
+  return head("Agenten")+(names.length?"":`<div class="card"><b>Noch keine Agenten-Einträge</b><p class="small dim" style="margin-bottom:0">Der Mac hat bisher nichts gemeldet. Sobald ein Agent etwas erledigt, steht es hier.</p></div>`)+names.map(n=>{ const mine=rows.filter(r=>r.agent===n), last=mine[0], act=last.date===t;
     return `<div class="card"><div class="row"><b class="grow">${esc(n)}</b><span class="pill ${act?'on':'off'}">${act?'heute aktiv':'zuletzt '+esc(last.date)}</span></div>
       <div style="margin-top:8px"><b>${esc(last.title)}</b><div class="small dim">${esc(last.detail)}</div></div>
       ${mine.slice(1,5).map(r=>`<div class="small" style="padding:6px 0;border-top:1px solid var(--line)"><span class="dim">${esc(r.date.slice(5))}</span> · ${esc(r.title)}</div>`).join("")}</div>`;}).join("")
@@ -447,6 +449,18 @@ function vAgenten(){
 }
 
 /* ---------- Abgleich mit dem Mac über privaten GitHub-Speicher ---------- */
+/* Daten vom Mac auf erwartete Formen bringen, damit eine kaputte Datei keine Ansicht zum Absturz bringt */
+function cleanSnap(j){
+  const o=x=>x&&typeof x==="object"&&!Array.isArray(x)?x:{};
+  const sn=Object.assign({},j);
+  sn.shopify=Array.isArray(j.shopify)?j.shopify.filter(x=>x&&typeof x==="object"):[];
+  const str=x=>x==null?"":String(x), num=x=>isFinite(+x)?+x:0;
+  sn.agents=(Array.isArray(j.agents)?j.agents:[]).filter(x=>x&&typeof x==="object"&&x.agent).map(x=>({agent:str(x.agent),date:str(x.date),title:str(x.title),detail:str(x.detail)}));
+  sn.resale=Object.assign({},o(j.resale)); sn.resale.recent=(Array.isArray(sn.resale.recent)?sn.resale.recent:[]).filter(x=>x&&typeof x==="object").map(x=>({id:str(x.id),platform:str(x.platform),title:str(x.title),price:num(x.price),date:str(x.date)}));
+  sn.resale.platforms=o(sn.resale.platforms);
+  if(j.claude!==undefined){ sn.claude=Object.assign({},o(j.claude)); sn.claude.windows=(Array.isArray(sn.claude.windows)?sn.claude.windows:[]).filter(w=>w&&typeof w==="object").map(w=>({label:str(w.label),percentUsed:Math.max(0,Math.min(100,Math.round(num(w.percentUsed))))})); }
+  return sn;
+}
 const gh = () => ({Authorization:"Bearer "+S.sync.token, Accept:"application/vnd.github+json"});
 /* Eingaben säubern: Handy-Einfügen bringt oft Leerzeichen, Umbrüche, Anführungszeichen oder die ganze GitHub-URL mit */
 const cleanToken = t => String(t||"").replace(/^(authorization:)?\s*(bearer|token)\s+/i,"").replace(/[\s"'“”‘’`]/g,"");
@@ -520,9 +534,12 @@ async function fetchSnap(){
         if(why) throw new Error(why);
         if(r.status===404){ c.err=null; c.waiting=true; await fetchInbox(); save(); if(tab==="heute"&&!document.activeElement.matches("input,textarea,select")) render(); return; }          // Verbindung ok, Mac hat nur noch nichts hochgeladen
         throw new Error("Fehler "+r.status); }
-      snap=await r.json(); c.err=null; c.waiting=false;
+      const txt=await r.text(); let j;
+      try{ j=JSON.parse(txt); }catch(e){ throw new Error("Datei vom Mac ist leer oder beschädigt. Sie wird beim nächsten Upload ersetzt."); }
+      if(!j || typeof j!=="object" || Array.isArray(j)) throw new Error("Datei vom Mac hat ein unerwartetes Format.");
+      snap=cleanSnap(j); c.err=null; c.waiting=false;
     } else { const r=await fetch("snapshot.json",{cache:"no-store"}); if(r.ok) snap=await r.json(); }
-  }catch(e){ c.err=String(e.message||e); }
+  }catch(e){ c.err = (e instanceof TypeError || !navigator.onLine) ? "Kein Netz – die App zeigt den letzten Stand." : String(e.message||e); }
   if(snap){
     const ids=((snap.resale||{}).recent||[]).map(x=>x.id), orders=(snap.shopify||[]).reduce((a,x)=>a+((x.month||{}).orders||0),0);
     if(c.seen){ ids.filter(i=>!c.seen.includes(i)).forEach(i=>{ const x=snap.resale.recent.find(y=>y.id===i);
@@ -600,7 +617,10 @@ async function wakeSync(){
 function render(){
   const views={heute:vHeute,umsatz:vUmsatz,agenten:vAgenten,aufgaben:vAufgaben,sperren:vSperren,mehr:vMehr};
   const keep = document.activeElement && document.activeElement.id==="nt" ? document.activeElement.value : null;
-  $("#app").innerHTML=views[tab]();
+  let html; try{ html=views[tab](); }catch(e){
+    html=head("Fehler")+`<div class="card"><b class="red">Diese Ansicht konnte nicht angezeigt werden.</b><p class="small dim">${esc(e&&e.message||e)}</p>
+      <button class="primary block" data-act="dropsnap">Mac-Daten verwerfen und neu laden</button></div>`; }
+  $("#app").innerHTML=html;
   $("#nav").innerHTML=TABS.map(t=>`<button class="${tab===t[0]?'on':''}" data-tab="${t[0]}"><b>${t[1]}</b>${t[2]}</button>`).join("");
   if(keep!==null && $("#nt")){ $("#nt").value=keep; }
   focusOverlay(); wakeSync();
@@ -627,6 +647,7 @@ document.addEventListener("click",e=>{
   else if(a==="freedom"){ const v=parseFloat($("#fp").value); if(isNaN(v)) return; S.goals.freedom.profit=Math.max(0,v); save(); render(); }
   else if(a==="mtarget"){ const v=parseFloat($("#mt").value); if(isNaN(v)) return; S.goals.monthTarget=Math.max(5000,v); save(); render(); if(v<5000) toast("Mindestens 5.000 €."); }
   else if(a==="vdel"){ const l=visionImgs().slice(); l.splice(+el.dataset.i,1); setVision(l); render(); }
+  else if(a==="dropsnap"){ S.sync.snap=null; S.sync.seen=null; S.sync.err=null; save(); toast("Lade neu …"); fetchSnap().then(()=>render()); }
   else if(a==="msgread"){ S.inbox=S.inbox||{read:[],seen:[],msgs:[]}; S.inbox.read.push(id); S.inbox.read=S.inbox.read.slice(-100); save(); render(); pushState(true); }
   else if(a==="why"){ S.why=$("#why").value; save(); render(); toast("Gespeichert."); }
   else if(a==="per"){ S.per=el.dataset.p; save(); render(); }
